@@ -328,7 +328,12 @@ def chromadb_status_chapter(chapter_id: str):
 
 
 if __name__ == '__main__':
+    
+
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
     os.makedirs(os.path.dirname(ORIGINAL_CHAPTER_PATH), exist_ok=True)
     os.makedirs(os.path.dirname(SCREENSHOT_OUTPUT_FILE_PATH), exist_ok=True)
-    app.run(debug=True, port=5000)
+
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=True, host='0.0.0.0', port=port)
+
