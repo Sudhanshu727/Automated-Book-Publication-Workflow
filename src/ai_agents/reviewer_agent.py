@@ -1,5 +1,6 @@
 # src/ai_agents/reviewer_agent.py
-
+from dotenv import load_dotenv
+load_dotenv() # This loads variables from .env file
 import asyncio
 import os
 import sys

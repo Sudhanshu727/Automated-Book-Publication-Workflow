@@ -12,7 +12,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..'))
 # It's highly recommended to load this from environment variables in a production setup
 # For development, you can paste it directly here, but be careful not to commit it to public repos.
 # Example: GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_GEMINI_API_KEY_HERE")
-GEMINI_API_KEY = "AIzaSyBSi63e2XDkKmouF3d-gaQDvqOe1qn-SB8" # Leave empty, Canvas will provide it at runtime.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") # Leave empty, Canvas will provide it at runtime.
 
 # Define paths for input and output files relative to PROJECT_ROOT
 ORIGINAL_CHAPTER_PATH = os.path.join(PROJECT_ROOT, "src", "data", "raw", "chapter_content.txt")

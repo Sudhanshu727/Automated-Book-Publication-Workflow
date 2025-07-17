@@ -1,4 +1,6 @@
 # src/human_in_loop/backend/app.py
+from dotenv import load_dotenv
+load_dotenv() # This loads variables from .env file
 
 import os
 from flask import Flask, jsonify, send_from_directory, request
@@ -14,7 +16,9 @@ from config import ORIGINAL_CHAPTER_PATH, SCREENSHOT_OUTPUT_FILE_PATH, DEFAULT_C
 from database.chroma_manager import ChromaManager # Import ChromaManager
 # Import the writer_agent and reviewer_agent to trigger them
 from ai_agents.writer_agent import spin_chapter_content
-from ai_agents.reviewer_agent import review_chapter_content # Import the async function for reviewer
+from ai_agents.reviewer_agent import review_chapter_content
+# Import the reward model functions
+from rl_system.reward_model import calculate_review_reward, calculate_human_action_reward, log_workflow_event
 
 app = Flask(__name__)
 CORS(app)
@@ -108,6 +112,10 @@ def approve_chapter(chapter_id: str):
 
         if version_id:
             app.logger.info(f"Chapter '{chapter_id}' successfully approved. New version ID: {version_id}")
+            # --- RL Logging: Human Approval ---
+            reward = calculate_human_action_reward("approved")
+            log_workflow_event("human_action_approved", chapter_id, version_id, reward, {"approved_version_id": latest_spun_version['id']})
+            # --- End RL Logging ---
             return jsonify({"message": f"Chapter '{chapter_id}' approved successfully.", "version_id": version_id}), 200
         else:
             app.logger.error(f"Failed to record approval for chapter '{chapter_id}' in ChromaDB.")
@@ -154,6 +162,10 @@ async def request_revision(chapter_id: str):
             return jsonify({"error": "Failed to record revision request."}), 500
         
         app.logger.info(f"Chapter '{chapter_id}' revision request recorded. New version ID: {version_id}")
+        # --- RL Logging: Human Revision Request ---
+        reward = calculate_human_action_reward("revision_requested", feedback)
+        log_workflow_event("human_action_revision_requested", chapter_id, version_id, reward, {"feedback": feedback, "revised_version_id": latest_spun_version['id']})
+        # --- End RL Logging ---
 
         app.logger.info(f"Triggering AI Writer to generate new spun content for chapter: {chapter_id} with feedback.")
         original_content_version = chroma_manager.get_latest_chapter_version(chapter_id, "original")
@@ -168,6 +180,9 @@ async def request_revision(chapter_id: str):
             return jsonify({"error": f"AI Writer failed to generate revised content: {new_spun_content}"}), 500
         
         app.logger.info(f"AI Writer successfully generated revised content for chapter: {chapter_id}")
+        # --- RL Logging: AI Writer Output ---
+        log_workflow_event("ai_writer_output", chapter_id, None, 0.0, {"type": "spun_revision", "feedback_used": feedback}) # Reward for writer is indirect
+        # --- End RL Logging ---
 
         app.logger.info(f"Triggering AI Reviewer for the newly generated spun content for chapter: {chapter_id}.")
         new_review_comments = await review_chapter_content(chapter_id, new_spun_content)
@@ -177,6 +192,10 @@ async def request_revision(chapter_id: str):
             return jsonify({"message": f"Chapter '{chapter_id}' revision requested and new content generated, but review failed.", "version_id": version_id}), 200
         
         app.logger.info(f"AI Reviewer successfully generated new review comments for chapter: {chapter_id}")
+        # --- RL Logging: AI Reviewer Output ---
+        review_reward = calculate_review_reward(new_review_comments)
+        log_workflow_event("ai_reviewer_output", chapter_id, None, review_reward, {"review_text": new_review_comments})
+        # --- End RL Logging ---
 
         return jsonify({"message": f"Chapter '{chapter_id}' revision requested, new content and review generated successfully.", "version_id": version_id}), 200
 
@@ -186,10 +205,6 @@ async def request_revision(chapter_id: str):
 
 @app.route('/semantic_search', methods=['POST'])
 def semantic_search_endpoint():
-    """
-    Endpoint for performing semantic search on ChromaDB.
-    Expects JSON body with 'query_text', and optional 'n_results', 'filter_metadata'.
-    """
     app.logger.info("Received request for semantic search.")
     if chroma_manager is None:
         app.logger.error("ChromaManager not initialized globally. Cannot perform semantic search.")
@@ -207,7 +222,6 @@ def semantic_search_endpoint():
         app.logger.info(f"Performing semantic search for query: '{query_text}' with n_results={n_results}, filter={filter_metadata}")
         search_results = chroma_manager.semantic_search(query_text, n_results, filter_metadata)
 
-        # Format results for frontend
         formatted_results = []
         for res in search_results:
             formatted_results.append({
