@@ -4,21 +4,24 @@ import sys
 from playwright.async_api import async_playwright
 
 # Add the parent directory to the Python path to allow imports from src/
-# This is crucial when running scripts from subdirectories
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-# Import the path from our centralized configuration
-from src.config import ORIGINAL_CHAPTER_PATH, SCREENSHOT_OUTPUT_FILE_PATH # Assuming you'll add SCREENSHOT_OUTPUT_FILE_PATH to config.py later
+# Import paths and DEFAULT_CHAPTER_ID from our centralized configuration
+from src.config import ORIGINAL_CHAPTER_PATH, SCREENSHOT_OUTPUT_FILE_PATH, DEFAULT_CHAPTER_ID
+# CORRECTED IMPORT: Import from src.database.chroma_manager
+from src.database.chroma_manager import ChromaManager # Import ChromaManager
 
 # Define the URL to scrape
 URL = "https://en.wikisource.org/wiki/The_Gates_of_Morning/Book_1/Chapter_1"
 
-async def scrape_chapter(url: str):
+async def scrape_chapter(url: str, chapter_id: str):
     """
-    Scrapes the main content from a given URL and takes a full-page screenshot.
+    Scrapes the main content from a given URL, takes a full-page screenshot,
+    and stores the original content in ChromaDB.
 
     Args:
         url (str): The URL of the web page to scrape.
+        chapter_id (str): The ID to associate with this chapter in ChromaDB.
     """
     print(f"Starting to scrape: {url}")
     async with async_playwright() as p:
@@ -32,18 +35,9 @@ async def scrape_chapter(url: str):
             print("Page loaded successfully.")
 
             # --- Extract Chapter Content ---
-            # This selector targets the main content area of a MediaWiki page,
-            # specifically the div with id 'mw-content-text' which contains the article text.
-            # We then look for paragraphs within this content.
             content_selector = "#mw-content-text .mw-parser-output"
-            
-            # Wait for the content to be visible
             await page.wait_for_selector(content_selector)
-
-            # Get the inner text of the content area
             chapter_content = await page.inner_text(content_selector)
-            
-            # Clean up the content (e.g., remove extra newlines or leading/trailing whitespace)
             cleaned_content = "\n".join([line.strip() for line in chapter_content.splitlines() if line.strip()])
 
             # Ensure the directory for the output file exists
@@ -54,14 +48,25 @@ async def scrape_chapter(url: str):
                 f.write(cleaned_content)
             print(f"Chapter content saved to {ORIGINAL_CHAPTER_PATH}")
 
-            # Ensure the directory for the screenshot file exists
-            screenshot_dir = os.path.dirname(SCREENSHOT_OUTPUT_FILE_PATH) if SCREENSHOT_OUTPUT_FILE_PATH else "screenshots"
-            os.makedirs(screenshot_dir, exist_ok=True)
+            # --- Store original content in ChromaDB ---
+            chroma_manager = ChromaManager() # Initialize ChromaManager
+            original_version_id = chroma_manager.add_chapter_version(
+                chapter_id=chapter_id, # Use the passed chapter_id
+                content=cleaned_content,
+                version_type="original"
+            )
+            if original_version_id:
+                print(f"Original content stored in ChromaDB with ID: {original_version_id}")
+            else:
+                print("Failed to store original content in ChromaDB.")
 
-            # Save the screenshot to the specified path or default
-            screenshot_path = SCREENSHOT_OUTPUT_FILE_PATH if SCREENSHOT_OUTPUT_FILE_PATH else os.path.join(screenshot_dir, "chapter_screenshot.png")
-            await page.screenshot(path=screenshot_path, full_page=True)
-            print(f"Full page screenshot saved to {screenshot_path}")
+            # --- Take Screenshot ---
+            # Ensure the directory for the screenshot file exists
+            os.makedirs(os.path.dirname(SCREENSHOT_OUTPUT_FILE_PATH), exist_ok=True)
+            
+            # Save the screenshot to the specified path
+            await page.screenshot(path=SCREENSHOT_OUTPUT_FILE_PATH, full_page=True)
+            print(f"Full page screenshot saved to {SCREENSHOT_OUTPUT_FILE_PATH}")
 
         except Exception as e:
             print(f"An error occurred during scraping: {e}")
@@ -72,7 +77,4 @@ async def scrape_chapter(url: str):
 
 # Main execution block
 if __name__ == "__main__":
-    # Ensure Playwright browsers are installed before running:
-    # run `playwright install` in your terminal
-    asyncio.run(scrape_chapter(URL))
-
+    asyncio.run(scrape_chapter(URL, DEFAULT_CHAPTER_ID))

@@ -2,3 +2,4 @@ playwright
 httpx
 Flask
 Flask-Cors
+chromadb

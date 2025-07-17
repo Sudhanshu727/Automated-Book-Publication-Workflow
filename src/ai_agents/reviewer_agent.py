@@ -3,30 +3,30 @@
 import asyncio
 import os
 import sys
-import httpx # Import httpx
+import httpx
 
 # Add the parent directory to the Python path to allow imports from src/
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from config import GEMINI_API_KEY, SPUN_CHAPTER_PATH, REVIEW_COMMENTS_PATH
+from config import GEMINI_API_KEY, DEFAULT_CHAPTER_ID
 from ai_agents.prompts import REVIEWER_PROMPT_TEMPLATE
+from database.chroma_manager import ChromaManager
 
-async def review_chapter_content(spun_chapter_content: str) -> str:
+async def review_chapter_content(chapter_id: str, spun_chapter_content: str) -> str:
     """
     Uses an LLM (Gemini) to review the given spun chapter content.
+    Stores the review comments in ChromaDB.
 
     Args:
+        chapter_id (str): The ID of the chapter being reviewed.
         spun_chapter_content (str): The spun chapter content to be reviewed.
 
     Returns:
-        str: The review comments from the AI Reviewer.
+        str: The review comments from the AI Reviewer, or an error message.
     """
     print("AI Reviewer: Reviewing spun chapter content...")
 
-    # Construct the payload for the Gemini API call
     prompt = REVIEWER_PROMPT_TEMPLATE.format(spun_chapter_content=spun_chapter_content)
-    
-    # Gemini API expects content in a specific structure
     payload = {
         "contents": [
             {
@@ -36,9 +36,6 @@ async def review_chapter_content(spun_chapter_content: str) -> str:
         ]
     }
 
-    # Make the API call to Gemini using httpx
-    # The API key is expected to be provided by the Canvas environment at runtime
-    # If running locally, ensure GEMINI_API_KEY is set in config.py or env vars
     apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
     
     async with httpx.AsyncClient() as client:
@@ -46,10 +43,10 @@ async def review_chapter_content(spun_chapter_content: str) -> str:
             response = await client.post(
                 apiUrl,
                 headers={'Content-Type': 'application/json'},
-                json=payload, # Use json parameter for dictionary payload
-                timeout=30.0 # Add a timeout
+                json=payload,
+                timeout=60.0
             )
-            response.raise_for_status() # Raise an exception for 4xx/5xx responses
+            response.raise_for_status()
 
             result = response.json()
 
@@ -60,6 +57,19 @@ async def review_chapter_content(spun_chapter_content: str) -> str:
                 review_comments = result["candidates"][0]["content"]["parts"][0].get("text", "")
                 if review_comments:
                     print("AI Reviewer: Review completed successfully!")
+                    
+                    chroma_manager = ChromaManager()
+                    version_id = chroma_manager.add_chapter_version(
+                        chapter_id=chapter_id,
+                        content=review_comments,
+                        version_type="review_comments",
+                        metadata={"reviewed_version_type": "spun"}
+                    )
+                    if version_id:
+                        print(f"AI Reviewer: Review comments stored in ChromaDB with ID: {version_id}")
+                    else:
+                        print("AI Reviewer: Failed to store review comments in ChromaDB.")
+
                     return review_comments
                 else:
                     print("AI Reviewer: Warning - Review comments text part is empty.")
@@ -81,30 +91,25 @@ async def review_chapter_content(spun_chapter_content: str) -> str:
 
 async def main():
     """
-    Main function to read spun content, review it, and save the comments.
+    Main function to fetch spun content from ChromaDB, review it, and save comments to ChromaDB.
     """
-    # Ensure the data/processed directory exists
-    os.makedirs(os.path.dirname(REVIEW_COMMENTS_PATH), exist_ok=True)
+    chapter_id = DEFAULT_CHAPTER_ID # Use the centralized ID
+    chroma_manager = ChromaManager()
 
-    try:
-        with open(SPUN_CHAPTER_PATH, "r", encoding="utf-8") as f:
-            spun_content = f.read()
-        print(f"Read spun chapter content from {SPUN_CHAPTER_PATH}")
-    except FileNotFoundError:
-        print(f"Error: Spun chapter content file not found at {SPUN_CHAPTER_PATH}")
-        print("Please ensure you have run the writer_agent.py script first.")
+    latest_spun_version = chroma_manager.get_latest_chapter_version(chapter_id, "spun")
+
+    if not latest_spun_version:
+        print(f"Error: No spun content found in ChromaDB for chapter_id: {chapter_id}.")
+        print("Please ensure the writer_agent.py script has been run successfully.")
         return
 
-    review_comments = await review_chapter_content(spun_content)
+    spun_content = latest_spun_version['content']
+    print(f"Retrieved latest spun content from ChromaDB (ID: {latest_spun_version['id']})")
 
-    if not review_comments.startswith("Error:"): # Check if an error occurred
-        with open(REVIEW_COMMENTS_PATH, "w", encoding="utf-8") as f:
-            f.write(review_comments)
-        print(f"Review comments saved to {REVIEW_COMMENTS_PATH}")
-    else:
-        print(f"Failed to save review comments due to error: {review_comments}")
+    review_comments = await review_chapter_content(chapter_id, spun_content)
+
+    if review_comments.startswith("Error:"):
+        print(f"Failed to review chapter due to error: {review_comments}")
 
 if __name__ == "__main__":
-    # To run this, ensure you have a spun_chapter.txt in src/data/processed/
-    # from the previous AI Writer step.
     asyncio.run(main())
