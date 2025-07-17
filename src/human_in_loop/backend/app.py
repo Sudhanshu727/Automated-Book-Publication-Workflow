@@ -12,55 +12,44 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '.
 # Import DEFAULT_CHAPTER_ID and CHROMA_DB_PATH
 from config import ORIGINAL_CHAPTER_PATH, SCREENSHOT_OUTPUT_FILE_PATH, DEFAULT_CHAPTER_ID, CHROMA_DB_PATH
 from database.chroma_manager import ChromaManager # Import ChromaManager
-# Import the writer_agent to trigger it
-from ai_agents.writer_agent import spin_chapter_content # Import the async function
+# Import the writer_agent and reviewer_agent to trigger them
+from ai_agents.writer_agent import spin_chapter_content
+from ai_agents.reviewer_agent import review_chapter_content # Import the async function for reviewer
 
 app = Flask(__name__)
 CORS(app)
 
 # Initialize ChromaManager GLOBALLY when the Flask app starts
-# This ensures it's initialized only once and is ready for all requests.
 try:
     app.logger.info("Initializing ChromaManager globally for Flask app...")
     chroma_manager = ChromaManager()
     app.logger.info(f"ChromaManager initialized. Collection: '{chroma_manager.collection.name}' at path: '{CHROMA_DB_PATH}'")
-    # Attempt to count items in the collection to verify it's not empty
     collection_count = chroma_manager.collection.count()
     app.logger.info(f"ChromaDB collection '{chroma_manager.collection.name}' has {collection_count} documents on Flask startup.")
 except Exception as e:
     app.logger.error(f"CRITICAL ERROR: Failed to initialize ChromaManager globally: {e}")
-    chroma_manager = None # Set to None if initialization fails, will cause 500s for DB routes
+    chroma_manager = None
 
-# Define the base directory for our data files (only for screenshot now)
 DATA_BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'data'))
 
 @app.route('/')
 def index():
-    """Basic route to confirm the server is running."""
     app.logger.info("Human-in-the-Loop Backend is running!")
     return "Human-in-the-Loop Backend is running!"
 
 @app.route('/content/<chapter_id>/<version_type>')
 def get_chapter_version(chapter_id: str, version_type: str):
-    """
-    Serves specific content versions (original, spun, review_comments) from ChromaDB.
-    """
     app.logger.info(f"Received request for chapter_id: {chapter_id}, version_type: {version_type}")
-
     if chroma_manager is None:
         app.logger.error("ChromaManager not initialized globally. Cannot fetch content.")
         return jsonify({"error": "Backend database not available."}), 500
-
     if version_type not in ["original", "spun", "review_comments"]:
         app.logger.error(f"Invalid version type requested: {version_type}")
         return jsonify({"error": "Invalid version type."}), 400
-
-    # Validate that the requested chapter_id matches our default for now
     if chapter_id != DEFAULT_CHAPTER_ID:
         app.logger.warning(f"Requested chapter_id '{chapter_id}' does not match DEFAULT_CHAPTER_ID '{DEFAULT_CHAPTER_ID}'.")
         return jsonify({"error": f"Chapter ID '{chapter_id}' not found."}), 404
 
-    # Add debug logging for the query to ChromaDB
     app.logger.info(f"Attempting to retrieve latest version for chapter_id='{chapter_id}', version_type='{version_type}' from ChromaDB.")
     latest_version = chroma_manager.get_latest_chapter_version(chapter_id, version_type)
     
@@ -73,15 +62,10 @@ def get_chapter_version(chapter_id: str, version_type: str):
 
 @app.route('/screenshot')
 def get_screenshot():
-    """
-    Serves the screenshot image.
-    """
     app.logger.info("Received request for screenshot.")
-    # No ChromaManager needed for screenshot serving, but keeping it consistent if other DB ops were added.
-    if chroma_manager is None: # Check if global manager failed init
+    if chroma_manager is None:
         app.logger.warning("ChromaManager not initialized, but attempting to serve screenshot.")
 
-    # Construct the absolute path to the screenshot file from config
     abs_screenshot_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', SCREENSHOT_OUTPUT_FILE_PATH))
     
     if not os.path.exists(abs_screenshot_path):
@@ -96,37 +80,28 @@ def get_screenshot():
 
 @app.route('/approve_chapter/<chapter_id>', methods=['POST'])
 def approve_chapter(chapter_id: str):
-    """
-    Endpoint to mark a chapter as 'approved' by a human reviewer.
-    This adds a new version to ChromaDB.
-    """
     app.logger.info(f"Received request to approve chapter: {chapter_id}")
     if chapter_id != DEFAULT_CHAPTER_ID:
         app.logger.warning(f"Attempt to approve invalid chapter ID: {chapter_id}")
         return jsonify({"error": "Invalid chapter ID."}), 400
-
     if chroma_manager is None:
         app.logger.error("ChromaManager not initialized globally. Cannot approve chapter.")
         return jsonify({"error": "Backend database not available."}), 500
 
     try:
-        # Retrieve the latest spun version to link the approval to it
         latest_spun_version = chroma_manager.get_latest_chapter_version(chapter_id, "spun")
-        
         if not latest_spun_version:
             app.logger.error(f"Cannot approve chapter {chapter_id}: No spun content found to approve.")
             return jsonify({"error": "No spun content found to approve."}), 404
 
-        # Add a new version indicating approval
         approval_metadata = {
             "human_action": "approved",
             "approved_spun_version_id": latest_spun_version['id'],
             "approved_timestamp": datetime.now().isoformat()
         }
-        # Store the spun content again, but with 'approved' version type
         version_id = chroma_manager.add_chapter_version(
             chapter_id=chapter_id,
-            content=latest_spun_version['content'], # Store the content of the approved spun version
+            content=latest_spun_version['content'],
             version_type="approved",
             metadata=approval_metadata
         )
@@ -142,45 +117,34 @@ def approve_chapter(chapter_id: str):
         return jsonify({"error": f"An error occurred during approval: {e}"}), 500
 
 @app.route('/request_revision/<chapter_id>', methods=['POST'])
-async def request_revision(chapter_id: str): # Made async to await spin_chapter_content
-    """
-    Endpoint to mark a chapter as 'revision_requested' by a human reviewer.
-    This adds a new version to ChromaDB and triggers a new AI writing process.
-    Optionally accepts a 'feedback' message in the request body.
-    """
+async def request_revision(chapter_id: str):
     app.logger.info(f"Received request for revision for chapter: {chapter_id}")
     if chapter_id != DEFAULT_CHAPTER_ID:
         app.logger.warning(f"Attempt to request revision for invalid chapter ID: {chapter_id}")
         return jsonify({"error": "Invalid chapter ID."}), 400
-
     if chroma_manager is None:
         app.logger.error("ChromaManager not initialized globally. Cannot request revision.")
         return jsonify({"error": "Backend database not available."}), 500
 
     try:
-        # Retrieve the latest spun version to link the revision request to it
         latest_spun_version = chroma_manager.get_latest_chapter_version(chapter_id, "spun")
-        
         if not latest_spun_version:
             app.logger.error(f"Cannot request revision for chapter {chapter_id}: No spun content found to revise.")
             return jsonify({"error": "No spun content found to revise."}), 404
 
-        # Get optional feedback from request body
         request_data = request.get_json(silent=True)
         feedback = request_data.get('feedback', '') if request_data else ''
         app.logger.info(f"Revision feedback received: '{feedback}'")
 
-        # Add a new version indicating revision requested
         revision_metadata = {
             "human_action": "revision_requested",
             "revised_spun_version_id": latest_spun_version['id'],
             "revision_request_timestamp": datetime.now().isoformat(),
             "feedback": feedback
         }
-        # Store the spun content again, but with 'revision_requested' version type
         version_id = chroma_manager.add_chapter_version(
             chapter_id=chapter_id,
-            content=latest_spun_version['content'], # Store the content of the spun version that needs revision
+            content=latest_spun_version['content'],
             version_type="revision_requested",
             metadata=revision_metadata
         )
@@ -191,33 +155,78 @@ async def request_revision(chapter_id: str): # Made async to await spin_chapter_
         
         app.logger.info(f"Chapter '{chapter_id}' revision request recorded. New version ID: {version_id}")
 
-        # --- Trigger AI Writer for Revision ---
         app.logger.info(f"Triggering AI Writer to generate new spun content for chapter: {chapter_id} with feedback.")
-        # Retrieve original content to pass to writer for context if needed, or just use spun content + feedback
         original_content_version = chroma_manager.get_latest_chapter_version(chapter_id, "original")
         if not original_content_version:
             app.logger.error(f"Could not find original content for chapter {chapter_id} to trigger revision.")
             return jsonify({"error": "Could not find original content for revision."}), 500
 
-        # Call the async spin_chapter_content function
-        new_spun_content = await spin_chapter_content(chapter_id, original_content_version['content'], feedback=feedback) # Pass feedback
+        new_spun_content = await spin_chapter_content(chapter_id, original_content_version['content'], feedback=feedback)
 
         if new_spun_content.startswith("Error:"):
             app.logger.error(f"AI Writer failed to generate revised content: {new_spun_content}")
             return jsonify({"error": f"AI Writer failed to generate revised content: {new_spun_content}"}), 500
         
         app.logger.info(f"AI Writer successfully generated revised content for chapter: {chapter_id}")
-        return jsonify({"message": f"Chapter '{chapter_id}' revision requested and new content generation triggered successfully.", "version_id": version_id}), 200
+
+        app.logger.info(f"Triggering AI Reviewer for the newly generated spun content for chapter: {chapter_id}.")
+        new_review_comments = await review_chapter_content(chapter_id, new_spun_content)
+
+        if new_review_comments.startswith("Error:"):
+            app.logger.error(f"AI Reviewer failed to generate new review comments: {new_review_comments}")
+            return jsonify({"message": f"Chapter '{chapter_id}' revision requested and new content generated, but review failed.", "version_id": version_id}), 200
+        
+        app.logger.info(f"AI Reviewer successfully generated new review comments for chapter: {chapter_id}")
+
+        return jsonify({"message": f"Chapter '{chapter_id}' revision requested, new content and review generated successfully.", "version_id": version_id}), 200
 
     except Exception as e:
         app.logger.error(f"Error during chapter revision request for {chapter_id}: {e}")
         return jsonify({"error": f"An error occurred during revision request: {e}"}), 500
 
+@app.route('/semantic_search', methods=['POST'])
+def semantic_search_endpoint():
+    """
+    Endpoint for performing semantic search on ChromaDB.
+    Expects JSON body with 'query_text', and optional 'n_results', 'filter_metadata'.
+    """
+    app.logger.info("Received request for semantic search.")
+    if chroma_manager is None:
+        app.logger.error("ChromaManager not initialized globally. Cannot perform semantic search.")
+        return jsonify({"error": "Backend database not available."}), 500
+
+    try:
+        request_data = request.get_json()
+        query_text = request_data.get('query_text')
+        n_results = request_data.get('n_results', 5)
+        filter_metadata = request_data.get('filter_metadata', {})
+
+        if not query_text:
+            return jsonify({"error": "Missing 'query_text' in request body."}), 400
+
+        app.logger.info(f"Performing semantic search for query: '{query_text}' with n_results={n_results}, filter={filter_metadata}")
+        search_results = chroma_manager.semantic_search(query_text, n_results, filter_metadata)
+
+        # Format results for frontend
+        formatted_results = []
+        for res in search_results:
+            formatted_results.append({
+                "id": res['id'],
+                "content": res['content'],
+                "version_type": res['metadata'].get('version_type', 'unknown'),
+                "timestamp": res['metadata'].get('timestamp', 'unknown'),
+                "distance": res['distance']
+            })
+        
+        app.logger.info(f"Semantic search returned {len(formatted_results)} results.")
+        return jsonify({"results": formatted_results}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error during semantic search: {e}")
+        return jsonify({"error": f"An error occurred during semantic search: {e}"}), 500
+
 @app.route('/chromadb_status')
 def chromadb_status():
-    """
-    Provides a status check for ChromaDB and lists available content.
-    """
     app.logger.info("Received request for ChromaDB status.")
     if chroma_manager is None:
         app.logger.error("ChromaManager not initialized globally. Cannot get ChromaDB status.")
@@ -227,7 +236,6 @@ def chromadb_status():
         collection_count = chroma_manager.collection.count()
         app.logger.info(f"ChromaDB collection '{chroma_manager.collection.name}' has {collection_count} documents.")
 
-        # Try to retrieve all versions for the default chapter to list them
         all_versions = chroma_manager.get_all_chapter_versions(DEFAULT_CHAPTER_ID)
         
         if all_versions:
@@ -261,14 +269,10 @@ def chromadb_status():
 
 @app.route('/chromadb_status_chapter/<chapter_id>')
 def chromadb_status_chapter(chapter_id: str):
-    """
-    Provides the latest human-driven status for a specific chapter.
-    """
     app.logger.info(f"Received request for chapter status for chapter: {chapter_id}")
     if chapter_id != DEFAULT_CHAPTER_ID:
         app.logger.warning(f"Attempt to get status for invalid chapter ID: {chapter_id}")
         return jsonify({"error": "Invalid chapter ID."}), 400
-
     if chroma_manager is None:
         app.logger.error("ChromaManager not initialized globally. Cannot get chapter status.")
         return jsonify({"error": "Backend database not available."}), 500
@@ -276,7 +280,7 @@ def chromadb_status_chapter(chapter_id: str):
     try:
         all_versions = chroma_manager.get_all_chapter_versions(chapter_id)
         
-        latest_status = 'pending' # Default status
+        latest_status = 'pending'
         latest_timestamp = datetime.min
 
         for version in all_versions:
@@ -285,26 +289,21 @@ def chromadb_status_chapter(chapter_id: str):
             
             if v_timestamp_str:
                 v_timestamp = datetime.fromisoformat(v_timestamp_str)
-                # Only consider human-driven actions for overall status
                 if v_type == 'approved' and v_timestamp > latest_timestamp:
                     latest_status = 'approved'
                     latest_timestamp = v_timestamp
                 elif v_type == 'revision_requested' and v_timestamp > latest_timestamp:
                     latest_status = 'revision_requested'
                     latest_timestamp = v_timestamp
-                # If a new 'spun' version is generated *after* a revision request,
-                # the status should revert to 'pending' for human review again.
-                # This logic ensures the human-in-the-loop cycle.
-                elif v_type == 'spun' and v_timestamp > latest_timestamp and latest_status == 'revision_requested':
-                    latest_status = 'processing' # Indicate new spun content is available but not yet reviewed
+                elif v_type == 'spun' and v_timestamp > latest_timestamp:
+                    if latest_status == 'revision_requested':
+                        latest_status = 'processing'
+                    elif latest_status == 'pending':
+                        latest_status = 'pending'
                     latest_timestamp = v_timestamp
-                elif v_type == 'spun' and latest_status == 'pending': # Initial spun content
-                    latest_status = 'pending' # Keep pending if no human action yet
-                    latest_timestamp = v_timestamp # Update timestamp to latest spun version
-                elif v_type == 'original' and latest_status == 'pending': # Initial original content
-                     latest_status = 'pending' # Keep pending if no human action yet
-                     latest_timestamp = v_timestamp # Update timestamp to latest original version
-
+                elif v_type == 'original' and latest_status == 'pending':
+                     latest_status = 'pending'
+                     latest_timestamp = v_timestamp
 
         app.logger.info(f"Latest status for chapter '{chapter_id}': {latest_status}")
         return jsonify({"latest_status": latest_status}), 200
@@ -315,11 +314,7 @@ def chromadb_status_chapter(chapter_id: str):
 
 
 if __name__ == '__main__':
-    # Ensure the data directories exist (for original scraped files and ChromaDB)
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-    
     os.makedirs(os.path.dirname(ORIGINAL_CHAPTER_PATH), exist_ok=True)
     os.makedirs(os.path.dirname(SCREENSHOT_OUTPUT_FILE_PATH), exist_ok=True)
-    
-    # Run the Flask app
     app.run(debug=True, port=5000)

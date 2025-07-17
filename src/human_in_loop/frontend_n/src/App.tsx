@@ -1,7 +1,7 @@
 /* global __api_base__ */
 // src/human_in_loop/frontend_n/src/App.tsx
 
-import React, { useState, useEffect, useCallback } from "react"; // Added useCallback
+import React, { useState, useEffect, useCallback } from "react";
 import {
   FileText,
   Bot,
@@ -16,8 +16,9 @@ import {
   Maximize2,
   ChevronDown,
   ChevronUp,
-  XCircle, // Added for error messages
-  Hourglass, // Added for "Pending Review" status
+  XCircle,
+  Hourglass,
+  Search, // Added for search icon
 } from "lucide-react";
 
 interface ContentData {
@@ -32,8 +33,9 @@ interface LoadingState {
   spun: boolean;
   reviewComments: boolean;
   screenshot: boolean;
-  action: boolean; // New loading state for actions
-  status: boolean; // New loading state for fetching overall status
+  action: boolean;
+  status: boolean;
+  search: boolean; // New loading state for search
 }
 
 interface ErrorState {
@@ -42,8 +44,17 @@ interface ErrorState {
   reviewComments: string | null;
   screenshot: string | null;
   general: string | null;
-  action: string | null; // New error state for actions
-  status: string | null; // New error state for fetching overall status
+  action: string | null;
+  status: string | null;
+  search: string | null; // New error state for search
+}
+
+interface SearchResult {
+  id: string;
+  content: string;
+  version_type: string;
+  timestamp: string;
+  distance: number;
 }
 
 function App() {
@@ -60,7 +71,8 @@ function App() {
     reviewComments: true,
     screenshot: true,
     action: false,
-    status: true, // Initialize status loading as true
+    status: true,
+    search: false, // Initialize search loading as false
   });
 
   const [errors, setErrors] = useState<ErrorState>({
@@ -70,7 +82,8 @@ function App() {
     screenshot: null,
     general: null,
     action: null,
-    status: null, // Initialize status error as null
+    status: null,
+    search: null, // Initialize search error as null
   });
 
   const [imageError, setImageError] = useState(false);
@@ -81,7 +94,10 @@ function App() {
   const [revisionFeedback, setRevisionFeedback] = useState("");
   const [currentChapterStatus, setCurrentChapterStatus] = useState<
     "pending" | "approved" | "revision_requested" | "processing"
-  >("processing"); // New state for overall chapter status
+  >("processing");
+
+  const [searchQuery, setSearchQuery] = useState(""); // State for search input
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]); // State for search results
 
   const CHAPTER_ID = "the_gates_of_morning_book1_chapter1";
   const API_BASE =
@@ -89,7 +105,6 @@ function App() {
       ? __api_base__
       : "http://localhost:5000";
 
-  // Memoized fetchContent function
   const fetchContent = useCallback(
     async (endpoint: string, contentType: keyof ContentData) => {
       try {
@@ -115,30 +130,31 @@ function App() {
           setContent((prev) => ({ ...prev, [contentType]: fetchedContent }));
         }
 
-        setErrors((prev) => ({ ...prev, [contentType]: null })); // Clear specific error on success
+        setErrors((prev) => ({ ...prev, [contentType]: null }));
       } catch (error: any) {
-        // Use 'any' for error type if not strictly defined
-        const errorMessage =
+        let errorMessage =
           error instanceof Error
             ? error.message
             : "An unexpected error occurred";
+        if (errorMessage.includes("AbortError")) {
+          errorMessage = `Request timed out for ${contentType}.`;
+        }
         setErrors((prev) => ({ ...prev, [contentType]: errorMessage }));
-        console.error(`Error fetching ${contentType}:`, error); // Log detailed error
+        console.error(`Error fetching ${contentType}:`, error);
       } finally {
-        setLoading((prev) => ({ ...prev, [contentType]: false })); // Set loading to false regardless of success/failure
+        setLoading((prev) => ({ ...prev, [contentType]: false }));
       }
     },
     [API_BASE]
-  ); // Dependency array for useCallback
+  );
 
-  // New function to fetch the latest chapter status from the backend
   const fetchChapterStatus = useCallback(async () => {
     setLoading((prev) => ({ ...prev, status: true }));
     setErrors((prev) => ({ ...prev, status: null }));
     try {
       const response = await fetch(
         `${API_BASE}/chromadb_status_chapter/${CHAPTER_ID}`
-      ); // New endpoint
+      );
       if (!response.ok) {
         const errorData = await response
           .json()
@@ -153,7 +169,7 @@ function App() {
       if (data.latest_status) {
         setCurrentChapterStatus(data.latest_status);
       } else {
-        setCurrentChapterStatus("pending"); // Default if no specific status found
+        setCurrentChapterStatus("pending");
       }
     } catch (error: any) {
       const errorMessage =
@@ -162,13 +178,70 @@ function App() {
         ...prev,
         status: `Failed to fetch chapter status: ${errorMessage}`,
       }));
-      setCurrentChapterStatus("pending"); // Fallback status on error
+      setCurrentChapterStatus("pending");
     } finally {
       setLoading((prev) => ({ ...prev, status: false }));
     }
   }, [API_BASE, CHAPTER_ID]);
 
-  // Main useEffect to fetch all content and status on mount
+  // New function to handle semantic search
+  const handleSemanticSearch = async () => {
+    if (!searchQuery.trim()) {
+      setErrors((prev) => ({
+        ...prev,
+        search: "Please enter a search query.",
+      }));
+      setSearchResults([]);
+      return;
+    }
+
+    setLoading((prev) => ({ ...prev, search: true }));
+    setErrors((prev) => ({ ...prev, search: null }));
+    setSearchResults([]);
+
+    try {
+      const response = await fetch(`${API_BASE}/semantic_search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query_text: searchQuery,
+          n_results: 5,
+          filter_metadata: { chapter_id: CHAPTER_ID },
+        }), // Filter by current chapter
+      });
+
+      if (!response.ok) {
+        const errorData = await response
+          .json()
+          .catch(() => ({ message: response.statusText }));
+        throw new Error(
+          `HTTP error! status: ${response.status} - ${
+            errorData.message || response.statusText
+          }`
+        );
+      }
+
+      const data = await response.json();
+      setSearchResults(data.results || []);
+      if (data.results && data.results.length === 0) {
+        setErrors((prev) => ({
+          ...prev,
+          search: "No semantic search results found for your query.",
+        }));
+      }
+    } catch (error: any) {
+      const errorMessage =
+        error instanceof Error ? error.message : "An unexpected error occurred";
+      setErrors((prev) => ({
+        ...prev,
+        search: `Semantic search failed: ${errorMessage}`,
+      }));
+      console.error("Semantic search error:", error);
+    } finally {
+      setLoading((prev) => ({ ...prev, search: false }));
+    }
+  };
+
   useEffect(() => {
     const loadData = async () => {
       await Promise.all([
@@ -180,17 +253,16 @@ function App() {
         ),
         fetchContent("/screenshot", "screenshotUrl"),
       ]);
-      fetchChapterStatus(); // Fetch status after content
+      fetchChapterStatus();
     };
     loadData();
-  }, [fetchContent, fetchChapterStatus, CHAPTER_ID]); // Dependencies for main useEffect
+  }, [fetchContent, fetchChapterStatus, CHAPTER_ID]);
 
   const handleImageError = () => {
     setImageError(true);
     setErrors((prev) => ({ ...prev, screenshot: "Failed to load screenshot" }));
   };
 
-  // Function to handle workflow actions (Approve/Request Revision)
   const handleWorkflowAction = async (
     actionType: "approve" | "request_revision",
     feedback: string = ""
@@ -223,20 +295,28 @@ function App() {
       }
       setActionMessage(data.message);
       setCurrentChapterStatus(
-        actionType === "approve" ? "approved" : "revision_requested"
-      ); // Update local status immediately
+        actionType === "approve" ? "approved" : "processing"
+      );
 
-      // If revision requested, re-fetch content to show the new spun version
       if (actionType === "request_revision") {
-        setLoading((prev) => ({ ...prev, spun: true, reviewComments: true })); // Set loading for spun and comments
-        await fetchContent(`/content/${CHAPTER_ID}/spun`, "spun");
-        await fetchContent(
-          `/content/${CHAPTER_ID}/review_comments`,
-          "reviewComments"
-        ); // Re-fetch review comments for new spun content
         setActionMessage(
-          "Revision requested. New spun content and review comments are loading..."
+          "Revision requested. AI is generating new content and review. Please wait..."
         );
+        await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait for 10 seconds
+        setLoading((prev) => ({ ...prev, spun: true, reviewComments: true }));
+        await Promise.all([
+          fetchContent(`/content/${CHAPTER_ID}/spun`, "spun"),
+          fetchContent(
+            `/content/${CHAPTER_ID}/review_comments`,
+            "reviewComments"
+          ),
+        ]);
+        await fetchChapterStatus();
+        setActionMessage(
+          "New content and review comments loaded. Ready for review."
+        );
+      } else if (actionType === "approve") {
+        await fetchChapterStatus();
       }
     } catch (error: any) {
       const errorMessage =
@@ -247,13 +327,12 @@ function App() {
       }));
     } finally {
       setLoading((prev) => ({ ...prev, action: false }));
-      setShowFeedbackModal(false); // Close modal after action attempt
-      setRevisionFeedback(""); // Clear feedback
+      setShowFeedbackModal(false);
+      setRevisionFeedback("");
     }
   };
 
   const getStatusInfo = () => {
-    // This function now reflects the overall chapter status
     switch (currentChapterStatus) {
       case "approved":
         return {
@@ -430,7 +509,7 @@ function App() {
         )}
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          {/* Content Comparison Section */}
+          {/* Content Comparison Section (Original, Spun, Screenshot) */}
           <div className="xl:col-span-2 space-y-6">
             {/* Original vs AI Spun Comparison */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -553,7 +632,7 @@ function App() {
             </div>
           </div>
 
-          {/* Review Panel */}
+          {/* Right Column: Review Panel, Semantic Search, Workflow Actions, Progress Summary */}
           <div className="space-y-6">
             {/* AI Review Comments */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -598,6 +677,77 @@ function App() {
               )}
             </div>
 
+            {/* Semantic Search Section - NEWLY ADDED */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Semantic Search
+                </h3>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    placeholder="Search content semantically..."
+                    className="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyPress={(e) => {
+                      // Allow pressing Enter to search
+                      if (e.key === "Enter") {
+                        handleSemanticSearch();
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={handleSemanticSearch}
+                    disabled={loading.search}
+                    className={`p-2 rounded-lg text-white transition-colors
+                      ${
+                        loading.search
+                          ? "bg-gray-400 cursor-not-allowed"
+                          : "bg-blue-600 hover:bg-blue-700"
+                      }
+                    `}
+                  >
+                    {loading.search ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <Search className="h-5 w-5" />
+                    )}
+                  </button>
+                </div>
+                {errors.search && (
+                  <MessageDisplay message={errors.search} type="error" />
+                )}
+
+                {searchResults.length > 0 && (
+                  <div className="space-y-3 max-h-60 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-gray-50">
+                    <h4 className="font-medium text-gray-800">
+                      Search Results:
+                    </h4>
+                    {searchResults.map((result) => (
+                      <div
+                        key={result.id}
+                        className="text-sm border-b border-gray-100 pb-2 last:border-b-0"
+                      >
+                        <p className="font-semibold text-gray-700">
+                          {result.version_type.replace(/_/g, " ").toUpperCase()}{" "}
+                          (Distance: {result.distance.toFixed(4)})
+                        </p>
+                        <p className="text-gray-600 line-clamp-2">
+                          {result.content}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          ID: {result.id}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Workflow Actions */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
               <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
@@ -616,27 +766,27 @@ function App() {
                   colorClass="bg-green-600 hover:bg-green-700 text-white"
                   disabled={
                     currentChapterStatus === "approved" || loading.action
-                  } // Disable if already approved or action in progress
+                  }
                 />
                 <ActionButton
-                  onClick={() => setShowFeedbackModal(true)} // Open modal for revision
+                  onClick={() => setShowFeedbackModal(true)}
                   loading={loading.action}
                   icon={ArrowRight}
                   text="Request Revision"
                   colorClass="bg-blue-600 hover:bg-blue-700 text-white"
                   disabled={
                     currentChapterStatus === "approved" || loading.action
-                  } // Disable if approved or action in progress
+                  }
                 />
                 <ActionButton
                   onClick={() =>
                     alert("Preview Final functionality not yet implemented.")
-                  } // Placeholder
+                  }
                   loading={false}
                   icon={Eye}
                   text="Preview Final"
                   colorClass="border border-gray-300 hover:bg-gray-50 text-gray-700"
-                  disabled={true} // Disable for now as it's not implemented
+                  disabled={true}
                 />
               </div>
             </div>
