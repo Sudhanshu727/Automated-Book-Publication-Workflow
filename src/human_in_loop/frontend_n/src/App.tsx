@@ -21,8 +21,8 @@ import {
   Search,
   Mic,
   StopCircle,
-  Volume2, // Added for speaker icon
-  VolumeX, // Added for mute icon
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 
 interface ContentData {
@@ -114,16 +114,13 @@ function App() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingContentId, setSpeakingContentId] = useState<string | null>(
     null
-  ); // To track which content is being spoken
+  );
 
   const CHAPTER_ID = "the_gates_of_morning_book1_chapter1";
-  // const API_BASE =
-  //   typeof __api_base__ !== "undefined"
-  //     ? __api_base__
-  //     : "http://localhost:5000";
 
+  // UPDATED: Use import.meta.env.VITE_BACKEND_API_BASE for Vite
   const API_BASE =
-    process.env.REACT_APP_BACKEND_API_BASE ||
+    import.meta.env.VITE_BACKEND_API_BASE ||
     (typeof __api_base__ !== "undefined"
       ? __api_base__
       : "http://localhost:5000");
@@ -280,7 +277,7 @@ function App() {
       const newRecognition = new SpeechRecognition();
       newRecognition.continuous = false;
       newRecognition.interimResults = false;
-      newRecognition.lang = "en-IN"; // Set language to Indian English for Hinglish context
+      newRecognition.lang = "en-IN";
 
       newRecognition.onstart = () => {
         setIsRecording(true);
@@ -311,7 +308,7 @@ function App() {
     if (isRecording) {
       recognition?.stop();
     } else {
-      setRevisionFeedback(""); // Clear previous feedback before new recording
+      setRevisionFeedback("");
       recognition?.start();
     }
   };
@@ -327,20 +324,18 @@ function App() {
     }
 
     if (isSpeaking && speakingContentId === contentId) {
-      // If currently speaking this content, stop it
       window.speechSynthesis.cancel();
       setIsSpeaking(false);
       setSpeakingContentId(null);
       return;
     }
 
-    // Stop any currently speaking content
     window.speechSynthesis.cancel();
     setIsSpeaking(false);
     setSpeakingContentId(null);
 
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-US"; // Default to US English, can be customized or detected
+    utterance.lang = "en-US";
 
     utterance.onstart = () => {
       setIsSpeaking(true);
@@ -423,7 +418,7 @@ function App() {
         setActionMessage(
           "Revision requested. AI is generating new content and review. Please wait..."
         );
-        await new Promise((resolve) => setTimeout(resolve, 10000)); // Wait for 10 seconds
+        await new Promise((resolve) => setTimeout(resolve, 10000));
         setLoading((prev) => ({ ...prev, spun: true, reviewComments: true }));
         await Promise.all([
           fetchContent(`/content/${CHAPTER_ID}/spun`, "spun"),
@@ -654,22 +649,18 @@ function App() {
                     <h3 className="font-medium text-gray-900">
                       Original Chapter
                     </h3>
-                    {loading.original && (
-                      <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                    {loading.original ? (
+                      <LoadingSpinner size="small" />
+                    ) : errors.original ? (
+                      <ErrorMessage message={errors.original} />
+                    ) : (
+                      <div className="h-96 overflow-y-auto bg-gray-50 rounded-lg p-4">
+                        <p className="text-gray-700 whitespace-pre-wrap leading-relaxed text-sm">
+                          {content.original}
+                        </p>
+                      </div>
                     )}
                   </div>
-
-                  {loading.original ? (
-                    <LoadingSpinner size="small" />
-                  ) : errors.original ? (
-                    <ErrorMessage message={errors.original} />
-                  ) : (
-                    <div className="h-96 overflow-y-auto bg-gray-50 rounded-lg p-4">
-                      <p className="text-gray-700 whitespace-pre-wrap leading-relaxed text-sm">
-                        {content.original}
-                      </p>
-                    </div>
-                  )}
                 </div>
 
                 {/* AI Spun Content */}
@@ -848,6 +839,7 @@ function App() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onKeyPress={(e) => {
+                      // Allow pressing Enter to search
                       if (e.key === "Enter") {
                         handleSemanticSearch();
                       }
