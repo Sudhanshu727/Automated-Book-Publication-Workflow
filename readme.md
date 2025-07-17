@@ -271,11 +271,5 @@ Once both the Flask backend and React frontend are running:
 - **Advanced "Preview Final":**  
   Generate a formatted, publishable output (e.g., PDF, EPUB) based on approved content.
 
----
 
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
 
