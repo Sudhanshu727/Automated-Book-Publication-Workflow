@@ -279,4 +279,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-_I hope this README.md is comprehensive and helpful for your GitHub repository! Let me know if you'd like any adjustments or further assistance._
