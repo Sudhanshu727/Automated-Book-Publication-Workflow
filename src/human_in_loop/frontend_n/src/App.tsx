@@ -117,12 +117,16 @@ function App() {
   ); // To track which content is being spoken
 
   const CHAPTER_ID = "the_gates_of_morning_book1_chapter1";
-  const API_BASE =
-    typeof __api_base__ !== "undefined"
-      ? __api_base__
-      : "http://localhost:5000";
+  // const API_BASE =
+  //   typeof __api_base__ !== "undefined"
+  //     ? __api_base__
+  //     : "http://localhost:5000";
 
-  // const API_BASE = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";
+  const API_BASE =
+    process.env.REACT_APP_BACKEND_API_BASE ||
+    (typeof __api_base__ !== "undefined"
+      ? __api_base__
+      : "http://localhost:5000");
 
   const fetchContent = useCallback(
     async (endpoint: string, contentType: keyof ContentData) => {
