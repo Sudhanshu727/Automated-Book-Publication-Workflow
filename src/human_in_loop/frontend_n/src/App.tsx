@@ -1,6 +1,3 @@
-/* global __api_base__ */
-// src/human_in_loop/frontend_n/src/App.tsx
-
 import React, { useState, useEffect, useCallback } from "react";
 import {
   FileText,
@@ -505,6 +502,13 @@ function App() {
     );
   };
 
+  const ErrorMessage = ({ message }: { message: string }) => (
+    <div className="flex items-center space-x-2 p-4 bg-red-50 border border-red-200 rounded-lg">
+      <AlertCircle className="h-5 w-5 text-red-500 flex-shrink-0" />
+      <span className="text-red-700 text-sm">{message}</span>
+    </div>
+  );
+
   const ActionButton = ({
     onClick,
     loading,
@@ -568,14 +572,24 @@ function App() {
       <div
         className={`flex items-center p-3 rounded-lg ${bgColor} ${color} mb-4`}
       >
-        <Icon className="h-5 w-5 mr-2" />
-        <span>{message}</span>
+        <Icon className="h-5 w-5 mr-2 flex-shrink-0" />
+        <span className="text-sm">{message}</span>
       </div>
     );
   };
 
+  // Calculate progress
+  const contentLoadingStates = [
+    loading.original,
+    loading.spun,
+    loading.reviewComments,
+    loading.screenshot,
+  ];
+  const completedItems = contentLoadingStates.filter((state) => !state).length;
+  const progressPercentage = (completedItems / 4) * 100;
+
   return (
-    <div className="min-h-screen bg-gray-50 font-inter">
+    <div className="min-h-screen bg-gray-50">
       {/* Enhanced Header */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-10 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -619,7 +633,7 @@ function App() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* General Error */}
         {errors.general && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4">
+          <div className="mb-6">
             <ErrorMessage message={errors.general} />
           </div>
         )}
@@ -649,18 +663,22 @@ function App() {
                     <h3 className="font-medium text-gray-900">
                       Original Chapter
                     </h3>
-                    {loading.original ? (
-                      <LoadingSpinner size="small" />
-                    ) : errors.original ? (
-                      <ErrorMessage message={errors.original} />
-                    ) : (
-                      <div className="h-96 overflow-y-auto bg-gray-50 rounded-lg p-4">
-                        <p className="text-gray-700 whitespace-pre-wrap leading-relaxed text-sm">
-                          {content.original}
-                        </p>
-                      </div>
+                    {loading.original && (
+                      <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
                     )}
                   </div>
+
+                  {loading.original ? (
+                    <LoadingSpinner size="small" />
+                  ) : errors.original ? (
+                    <ErrorMessage message={errors.original} />
+                  ) : (
+                    <div className="h-96 overflow-y-auto bg-gray-50 rounded-lg p-4">
+                      <p className="text-gray-700 whitespace-pre-wrap leading-relaxed text-sm">
+                        {content.original}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* AI Spun Content */}
@@ -670,25 +688,29 @@ function App() {
                     <h3 className="font-medium text-gray-900">
                       AI Generated Version
                     </h3>
-                    {/* Read Aloud Button for Spun Content */}
-                    <button
-                      onClick={() => speakContent(content.spun, "spun-content")}
-                      className="ml-auto p-1 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
-                      title={
-                        isSpeaking && speakingContentId === "spun-content"
-                          ? "Stop Reading"
-                          : "Read Aloud"
-                      }
-                    >
-                      {isSpeaking && speakingContentId === "spun-content" ? (
-                        <VolumeX className="h-5 w-5" />
-                      ) : (
-                        <Volume2 className="h-5 w-5" />
+                    <div className="ml-auto flex items-center space-x-2">
+                      {/* Read Aloud Button for Spun Content */}
+                      <button
+                        onClick={() =>
+                          speakContent(content.spun, "spun-content")
+                        }
+                        className="p-1 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
+                        title={
+                          isSpeaking && speakingContentId === "spun-content"
+                            ? "Stop Reading"
+                            : "Read Aloud"
+                        }
+                      >
+                        {isSpeaking && speakingContentId === "spun-content" ? (
+                          <VolumeX className="h-4 w-4" />
+                        ) : (
+                          <Volume2 className="h-4 w-4" />
+                        )}
+                      </button>
+                      {loading.spun && (
+                        <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
                       )}
-                    </button>
-                    {loading.spun && (
-                      <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-                    )}
+                    </div>
                   </div>
 
                   {loading.spun ? (
@@ -774,27 +796,34 @@ function App() {
                     <h3 className="font-medium text-gray-900">
                       AI Review Comments
                     </h3>
-                    {/* Read Aloud Button for Review Comments */}
-                    <button
-                      onClick={() =>
-                        speakContent(content.reviewComments, "review-comments")
-                      }
-                      className="ml-auto p-1 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
-                      title={
-                        isSpeaking && speakingContentId === "review-comments"
-                          ? "Stop Reading"
-                          : "Read Aloud"
-                      }
-                    >
-                      {isSpeaking && speakingContentId === "review-comments" ? (
-                        <VolumeX className="h-5 w-5" />
-                      ) : (
-                        <Volume2 className="h-5 w-5" />
+                    <div className="flex items-center space-x-2">
+                      {/* Read Aloud Button for Review Comments */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          speakContent(
+                            content.reviewComments,
+                            "review-comments"
+                          );
+                        }}
+                        className="p-1 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
+                        title={
+                          isSpeaking && speakingContentId === "review-comments"
+                            ? "Stop Reading"
+                            : "Read Aloud"
+                        }
+                      >
+                        {isSpeaking &&
+                        speakingContentId === "review-comments" ? (
+                          <VolumeX className="h-4 w-4" />
+                        ) : (
+                          <Volume2 className="h-4 w-4" />
+                        )}
+                      </button>
+                      {loading.reviewComments && (
+                        <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
                       )}
-                    </button>
-                    {loading.reviewComments && (
-                      <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-                    )}
+                    </div>
                   </div>
                   {reviewExpanded ? (
                     <ChevronUp className="h-4 w-4 text-gray-600" />
@@ -924,16 +953,6 @@ function App() {
                     currentChapterStatus === "approved" || loading.action
                   }
                 />
-                <ActionButton
-                  onClick={() =>
-                    alert("Preview Final functionality not yet implemented.")
-                  }
-                  loading={false}
-                  icon={Eye}
-                  text="Preview Final"
-                  colorClass="border border-gray-300 hover:bg-gray-50 text-gray-700"
-                  disabled={true}
-                />
               </div>
             </div>
 
@@ -946,25 +965,14 @@ function App() {
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-gray-600">Content Loading</span>
                   <span className={`font-medium ${statusInfo.color}`}>
-                    {
-                      Object.values(loading).filter(
-                        (l) => typeof l === "boolean" && l !== loading.action
-                      ).length
-                    }
-                    /4 Complete
+                    {completedItems}/4 Complete
                   </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
                     className="bg-blue-600 h-2 rounded-full transition-all duration-300"
                     style={{
-                      width: `${
-                        (Object.values(loading).filter(
-                          (l) => typeof l === "boolean" && l !== loading.action
-                        ).length /
-                          4) *
-                        100
-                      }%`,
+                      width: `${progressPercentage}%`,
                     }}
                   ></div>
                 </div>
@@ -1025,20 +1033,30 @@ function App() {
             </div>
             <div className="flex justify-end space-x-3">
               <button
-                onClick={() => setShowFeedbackModal(false)}
+                onClick={() => {
+                  setShowFeedbackModal(false);
+                  setRevisionFeedback("");
+                }}
                 className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors"
               >
                 Cancel
               </button>
-              <ActionButton
+              <button
                 onClick={() =>
                   handleWorkflowAction("request_revision", revisionFeedback)
                 }
-                loading={loading.action}
-                icon={ArrowRight}
-                text="Submit Revision Request"
-                colorClass="bg-blue-600 hover:bg-blue-700 text-white"
-              />
+                disabled={loading.action}
+                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed flex items-center space-x-2"
+              >
+                {loading.action ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ArrowRight className="h-4 w-4" />
+                )}
+                <span>
+                  {loading.action ? "Processing..." : "Submit Revision Request"}
+                </span>
+              </button>
             </div>
           </div>
         </div>
