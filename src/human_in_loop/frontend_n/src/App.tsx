@@ -18,7 +18,11 @@ import {
   ChevronUp,
   XCircle,
   Hourglass,
-  Search, // Added for search icon
+  Search,
+  Mic,
+  StopCircle,
+  Volume2, // Added for speaker icon
+  VolumeX, // Added for mute icon
 } from "lucide-react";
 
 interface ContentData {
@@ -35,7 +39,7 @@ interface LoadingState {
   screenshot: boolean;
   action: boolean;
   status: boolean;
-  search: boolean; // New loading state for search
+  search: boolean;
 }
 
 interface ErrorState {
@@ -46,7 +50,7 @@ interface ErrorState {
   general: string | null;
   action: string | null;
   status: string | null;
-  search: string | null; // New error state for search
+  search: string | null;
 }
 
 interface SearchResult {
@@ -72,7 +76,7 @@ function App() {
     screenshot: true,
     action: false,
     status: true,
-    search: false, // Initialize search loading as false
+    search: false,
   });
 
   const [errors, setErrors] = useState<ErrorState>({
@@ -83,7 +87,7 @@ function App() {
     general: null,
     action: null,
     status: null,
-    search: null, // Initialize search error as null
+    search: null,
   });
 
   const [imageError, setImageError] = useState(false);
@@ -96,8 +100,21 @@ function App() {
     "pending" | "approved" | "revision_requested" | "processing"
   >("processing");
 
-  const [searchQuery, setSearchQuery] = useState(""); // State for search input
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]); // State for search results
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+
+  // State for Voice Input (STT)
+  const [isRecording, setIsRecording] = useState(false);
+  const [recognition, setRecognition] = useState<SpeechRecognition | null>(
+    null
+  );
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+
+  // State for Voice Output (TTS)
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingContentId, setSpeakingContentId] = useState<string | null>(
+    null
+  ); // To track which content is being spoken
 
   const CHAPTER_ID = "the_gates_of_morning_book1_chapter1";
   const API_BASE =
@@ -184,7 +201,6 @@ function App() {
     }
   }, [API_BASE, CHAPTER_ID]);
 
-  // New function to handle semantic search
   const handleSemanticSearch = async () => {
     if (!searchQuery.trim()) {
       setErrors((prev) => ({
@@ -207,7 +223,7 @@ function App() {
           query_text: searchQuery,
           n_results: 5,
           filter_metadata: { chapter_id: CHAPTER_ID },
-        }), // Filter by current chapter
+        }),
       });
 
       if (!response.ok) {
@@ -240,6 +256,105 @@ function App() {
     } finally {
       setLoading((prev) => ({ ...prev, search: false }));
     }
+  };
+
+  // Voice Input Logic (STT)
+  const toggleRecording = () => {
+    if (!("webkitSpeechRecognition" in window)) {
+      setVoiceError(
+        "Speech Recognition not supported by your browser. Please use Chrome."
+      );
+      return;
+    }
+
+    if (!recognition) {
+      const SpeechRecognition =
+        (window as any).webkitSpeechRecognition ||
+        (window as any).SpeechRecognition;
+      const newRecognition = new SpeechRecognition();
+      newRecognition.continuous = false;
+      newRecognition.interimResults = false;
+      newRecognition.lang = "en-IN"; // Set language to Indian English for Hinglish context
+
+      newRecognition.onstart = () => {
+        setIsRecording(true);
+        setVoiceError(null);
+        setActionMessage("Listening for your feedback...");
+      };
+
+      newRecognition.onresult = (event: SpeechRecognitionEvent) => {
+        const transcript = event.results[0][0].transcript;
+        setRevisionFeedback((prev) => prev + (prev ? " " : "") + transcript);
+        setActionMessage("Feedback transcribed.");
+      };
+
+      newRecognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        setIsRecording(false);
+        setVoiceError(`Voice input error: ${event.error}. Please try again.`);
+        setActionMessage(null);
+        console.error("Speech recognition error:", event);
+      };
+
+      newRecognition.onend = () => {
+        setIsRecording(false);
+        setActionMessage(null);
+      };
+      setRecognition(newRecognition);
+    }
+
+    if (isRecording) {
+      recognition?.stop();
+    } else {
+      setRevisionFeedback(""); // Clear previous feedback before new recording
+      recognition?.start();
+    }
+  };
+
+  // Voice Output Logic (TTS)
+  const speakContent = (text: string, contentId: string) => {
+    if (!("speechSynthesis" in window)) {
+      setErrors((prev) => ({
+        ...prev,
+        general: "Text-to-Speech not supported by your browser.",
+      }));
+      return;
+    }
+
+    if (isSpeaking && speakingContentId === contentId) {
+      // If currently speaking this content, stop it
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+      setSpeakingContentId(null);
+      return;
+    }
+
+    // Stop any currently speaking content
+    window.speechSynthesis.cancel();
+    setIsSpeaking(false);
+    setSpeakingContentId(null);
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "en-US"; // Default to US English, can be customized or detected
+
+    utterance.onstart = () => {
+      setIsSpeaking(true);
+      setSpeakingContentId(contentId);
+    };
+    utterance.onend = () => {
+      setIsSpeaking(false);
+      setSpeakingContentId(null);
+    };
+    utterance.onerror = (event) => {
+      setIsSpeaking(false);
+      setSpeakingContentId(null);
+      setErrors((prev) => ({
+        ...prev,
+        general: `Text-to-Speech error: ${event.error}`,
+      }));
+      console.error("Speech synthesis error:", event);
+    };
+
+    window.speechSynthesis.speak(utterance);
   };
 
   useEffect(() => {
@@ -509,7 +624,7 @@ function App() {
         )}
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          {/* Content Comparison Section (Original, Spun, Screenshot) */}
+          {/* Left Column: Content Comparison (Original, Spun, Screenshot) */}
           <div className="xl:col-span-2 space-y-6">
             {/* Original vs AI Spun Comparison */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -558,6 +673,22 @@ function App() {
                     <h3 className="font-medium text-gray-900">
                       AI Generated Version
                     </h3>
+                    {/* Read Aloud Button for Spun Content */}
+                    <button
+                      onClick={() => speakContent(content.spun, "spun-content")}
+                      className="ml-auto p-1 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
+                      title={
+                        isSpeaking && speakingContentId === "spun-content"
+                          ? "Stop Reading"
+                          : "Read Aloud"
+                      }
+                    >
+                      {isSpeaking && speakingContentId === "spun-content" ? (
+                        <VolumeX className="h-5 w-5" />
+                      ) : (
+                        <Volume2 className="h-5 w-5" />
+                      )}
+                    </button>
                     {loading.spun && (
                       <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
                     )}
@@ -646,6 +777,24 @@ function App() {
                     <h3 className="font-medium text-gray-900">
                       AI Review Comments
                     </h3>
+                    {/* Read Aloud Button for Review Comments */}
+                    <button
+                      onClick={() =>
+                        speakContent(content.reviewComments, "review-comments")
+                      }
+                      className="ml-auto p-1 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
+                      title={
+                        isSpeaking && speakingContentId === "review-comments"
+                          ? "Stop Reading"
+                          : "Read Aloud"
+                      }
+                    >
+                      {isSpeaking && speakingContentId === "review-comments" ? (
+                        <VolumeX className="h-5 w-5" />
+                      ) : (
+                        <Volume2 className="h-5 w-5" />
+                      )}
+                    </button>
                     {loading.reviewComments && (
                       <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
                     )}
@@ -677,7 +826,7 @@ function App() {
               )}
             </div>
 
-            {/* Semantic Search Section - NEWLY ADDED */}
+            {/* Semantic Search Section */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
               <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
                 <h3 className="text-lg font-semibold text-gray-900">
@@ -693,7 +842,6 @@ function App() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onKeyPress={(e) => {
-                      // Allow pressing Enter to search
                       if (e.key === "Enter") {
                         handleSemanticSearch();
                       }
@@ -845,6 +993,38 @@ function App() {
               value={revisionFeedback}
               onChange={(e) => setRevisionFeedback(e.target.value)}
             ></textarea>
+            {voiceError && <MessageDisplay message={voiceError} type="error" />}
+            <div className="flex justify-between items-center mb-4">
+              <button
+                onClick={toggleRecording}
+                className={`p-2 rounded-lg text-white transition-colors flex items-center space-x-2
+                        ${
+                          isRecording
+                            ? "bg-red-600 hover:bg-red-700"
+                            : "bg-purple-600 hover:bg-purple-700"
+                        }
+                        ${
+                          !("webkitSpeechRecognition" in window)
+                            ? "opacity-50 cursor-not-allowed"
+                            : ""
+                        }
+                    `}
+                disabled={!("webkitSpeechRecognition" in window)}
+                title={isRecording ? "Stop Recording" : "Start Voice Input"}
+              >
+                {isRecording ? (
+                  <StopCircle className="h-5 w-5" />
+                ) : (
+                  <Mic className="h-5 w-5" />
+                )}
+                <span>{isRecording ? "Stop Recording" : "Voice Input"}</span>
+              </button>
+              {isRecording && (
+                <span className="text-sm text-gray-600 animate-pulse">
+                  Listening...
+                </span>
+              )}
+            </div>
             <div className="flex justify-end space-x-3">
               <button
                 onClick={() => setShowFeedbackModal(false)}
